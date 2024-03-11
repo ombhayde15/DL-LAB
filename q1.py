@@ -1,72 +1,111 @@
 import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms as T
+import torchvision.models as models
+import PIL
+import glob
+from PIL import Image
+from matplotlib import pyplot as plt
 
-tensor_a = torch.tensor([[1, 2, 3], [4, 5, 6]])
+# Define Gaussian noise transformation
+class Gaussian(object):
+    def __init__(self, mean: float, var: float):
+        self.mean = mean
+        self.var = var
 
-reshaped_tensor = tensor_a.view(3, 2)
-print("Reshaped Tensor:")
-print(reshaped_tensor)
+    def __call__(self, img: torch.Tensor) -> torch.Tensor:
+        return img + torch.normal(self.mean, self.var, img.size())
 
-viewed_tensor = tensor_a.view(3, 2)
-print("Viewed Tensor:")
-print(viewed_tensor)
+# Data augmentation transformations
+preprocess_augmented = T.Compose([
+    T.Resize((224, 224)),
+    T.ToTensor(),
+    T.RandomHorizontalFlip(),
+    T.RandomRotation(45),
+    Gaussian(0, 0.15),
+])
 
-tensor_b = torch.tensor([[7, 8, 9], [10, 11, 12]])
-stacked_tensor = torch.stack([tensor_a, tensor_b])
-print("Stacked Tensor:")
-print(stacked_tensor)
+# Without data augmentation
+preprocess_no_augmentation = T.Compose([
+    T.Resize((224, 224)),
+    T.ToTensor(),
+])
 
-tensor_c = torch.tensor([[[1, 2, 3]]])
-squeezed_tensor = torch.squeeze(tensor_c)
-print("Squeezed Tensor:")
-print(squeezed_tensor)
+# Custom dataset class
+class MyDataset(Dataset):
+    def __init__(self, transform=None, str="train"):
+        self.imgs_path = "./cats_and_dogs_filtered/" + str + "/"
+        file_list = glob.glob(self.imgs_path + "*")
+        self.data = []
+        for class_path in file_list:
+            class_name = class_path.split("/")[-1]
+            for img_path in glob.glob(class_path + "/*.jpg"):
+                self.data.append([img_path, class_name])
+        self.class_map = {"dogs": 0, "cats": 1}
+        self.transform = transform
 
-tensor_d = torch.tensor([1, 2, 3])
-unsqueezed_tensor = torch.unsqueeze(tensor_d, dim=0)
-print("Unsqueezed Tensor:")
-print(unsqueezed_tensor)
+    def __len__(self):
+        return len(self.data)
 
-# torch.permute
-tensor_a = torch.tensor([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])
-print("Original Tensor:")
-print(tensor_a)
+    def __getitem__(self, idx):
+        img_path, class_name = self.data[idx]
+        img = PIL.Image.open(img_path)
+        class_id = self.class_map[class_name]
+        class_id = torch.tensor(class_id)
+        if self.transform:
+            img = self.transform(img)
+        return img, class_id
 
-permuted_tensor = tensor_a.permute(2, 0, 1)
-print("\nPermuted Tensor:")
-print(permuted_tensor)
+# Define the neural network architecture
+class MyModel(nn.Module):
+    def __init__(self):
+        super(MyModel, self).__init__()
+        self.model = models.resnet18(pretrained=True)
+        self.model.fc = nn.Linear(self.model.fc.in_features, 2)  # Adjust output to 2 classes (dogs and cats)
 
-# Matrix Mul
+    def forward(self, x):
+        return self.model(x)
 
-tensor_e = torch.randn(7,7)
-print("tensor_e:")
-print(tensor_e)
+# Training function
+def train_model(model, dataloader, criterion, optimizer, num_epochs=5):
+    for epoch in range(num_epochs):
+        model.train()
+        running_loss = 0.0
+        correct_predictions = 0
+        total_predictions = 0
+        for inputs, labels in dataloader:
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
-random_tensor = torch.randn(1, 7)
-print("\nRandom Tensor:")
-print(random_tensor)
+            running_loss += loss.item()
+            _, predicted = torch.max(outputs, 1)
+            total_predictions += labels.size(0)
+            correct_predictions += (predicted == labels).sum().item()
 
-result_tensor = torch.matmul(tensor_e, random_tensor.t())
-print("\nResult Tensor:")
-print(result_tensor)
+        epoch_loss = running_loss / len(dataloader)
+        epoch_accuracy = correct_predictions / total_predictions
+        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss:.4f}, Accuracy: {epoch_accuracy:.4f}")
 
-# GPU
-tensor1 = torch.randn(2,3)
-tensor2 = torch.randn(2,3)
+# Create datasets and dataloaders
+dataset_augmented = MyDataset(transform=preprocess_augmented, str="train")
+dataset_no_augmentation = MyDataset(transform=preprocess_no_augmentation, str="train")
+dataloader_augmented = DataLoader(dataset_augmented, batch_size=32, shuffle=True)
+dataloader_no_augmentation = DataLoader(dataset_no_augmentation, batch_size=32, shuffle=True)
 
+# Initialize the model, criterion, and optimizer
+model = MyModel()
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-print(tensor1,tensor1.device)
-print(tensor2,tensor2.device)
+# Train with data augmentation
+print("Training with data augmentation:")
+train_model(model, dataloader_augmented, criterion, optimizer)
 
-tensor1_on_gpu = tensor1.to("cuda")
-print(tensor1_on_gpu)
-tensor2_on_gpu = tensor2.to("cuda")
-print(tensor2_on_gpu)
-
-max_value_tensor1 = torch.max(tensor1_on_gpu)
-min_value_tensor1 = torch.min(tensor1_on_gpu)
-max_value_tensor2 = torch.max(tensor2_on_gpu)
-min_value_tensor2 = torch.min(tensor2_on_gpu)
-
-print("Max",max_value_tensor1)
-print("Min",min_value_tensor1)
-print("Max",max_value_tensor2)
-print("Min",min_value_tensor2)
+# Train without data augmentation
+print("\nTraining without data augmentation:")
+train_model(model, dataloader_no_augmentation, criterion, optimizer)
